@@ -32,7 +32,7 @@ except ImportError:
     print("pytesseract/PIL/pdf2image not installed - fallback OCR unavailable")
 
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBCXzmSRgvYJENKIQPORG1ib_At5qzSncs")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 try:
     client = genai.Client(api_key=GEMINI_API_KEY)
     GEMINI_AVAILABLE = True
@@ -701,4 +701,5 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"❌ Error while processing invoice: {str(e)}")
                 import traceback
+
                 traceback.print_exc()
