@@ -200,7 +200,7 @@ class GeminiValidator:
     """AI-powered validation and missing field reconstruction"""
     
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv('GOOGLE_API_KEY')
+        self.api_key = api_key or os.getenv('GEMINI_API_KEY')
         if not self.api_key:
             raise ValueError("Google API key required. Set GOOGLE_API_KEY environment variable.")
         
@@ -812,4 +812,5 @@ if __name__ == "__main__":
     # Print AI validation info
     print("\nAI VALIDATION INFO")
     print("=" * 80)
+
     print(json.dumps(final_result["ai_validation"], indent=4))
