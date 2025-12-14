@@ -1,0 +1,9 @@
+{
+    "severity_weights": {
+        "critical": 3.0,
+        "high": 2.0,
+        "medium": 1.0,
+        "ai": 3.0
+    },
+    "max_weight_per_flag": 3.0
+}
