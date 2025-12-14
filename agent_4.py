@@ -191,7 +191,7 @@ class InvoiceAuditReportGenerator:
             use_gemini: Enable AI-powered narrative generation
             config: Override default report configuration
         """
-        self.api_key = api_key or os.getenv('GOOGLE_API_KEY')
+        self.api_key = api_key or os.getenv('GEMINI_API_KEY')
         self.use_gemini = use_gemini
         self.config = config or REPORT_CONFIG
         self.client = None
@@ -1203,4 +1203,5 @@ def main():
 
 
 if __name__ == '__main__':
+
     main()
