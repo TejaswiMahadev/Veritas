@@ -16,7 +16,7 @@ except ImportError:
     print("Warning: pytesseract or Pillow not installed. OCR features disabled.")
 
 # NIM Client
-from utils.nim_client import NimClient
+from nim_client import NimClient
 
 
 @dataclass
