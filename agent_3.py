@@ -1,775 +1,1245 @@
 import json
 import os
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Optional, Literal
+from datetime import datetime
+from google import genai
+from google.genai import types
+from dotenv import load_dotenv
 
-from rules import invoice_rules
-from gemini_analyzer import GeminiAnalyzer
+load_dotenv()
 
+REPORT_CONFIG = {
+    "risk_levels": {
+        "safe": {"label": "APPROVED", "icon": "✅", "action": "proceed"},
+        "needs_review": {"label": "NEEDS_REVIEW", "icon": "⚠️", "action": "manual_review"},
+        "high_risk": {"label": "HIGH_RISK", "icon": "🔶", "action": "escalate"},
+        "reject": {"label": "REJECT", "icon": "❌", "action": "reject"}
+    },
+    "severity_icons": {
+        "critical": "🔴",
+        "high": "🟠",
+        "medium": "🟡",
+        "low": "🟢",
+        "ai": "🤖"
+    },
+    "gemini_model": "gemini-2.5-flash",
+    "narrative_max_tokens": 1000,
+    "narrative_temperature": 0.5
+}
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config', 'risk_weights.json')
-
-def load_config() -> Dict[str, Any]:
-    """Load risk weights configuration with fallback defaults."""
-    default_config = {
-        "severity_weights": {
-            "critical": 3.0,
-            "high": 2.0,
-            "medium": 1.0,
-            "low": 0.5,
-            "ai": 3.0
-        },
-        "max_weight_per_flag": 3.0,
-        "score_blending": {
-            "deterministic_weight": 0.7,
-            "semantic_weight": 0.3
-        },
-        "risk_thresholds": {
-            "safe": 20,
-            "needs_review": 50,
-            "high_risk": 75
-        }
+INVOICE_FLAG_EXPLANATIONS = {
+    "INV_AMOUNT_MISMATCH": {
+        "title": "AMOUNT MISMATCH",
+        "icon": "💰",
+        "description": "The line items total does not match the final invoice total.",
+        "implication": "This discrepancy must be explained—it could be due to rounding, missing items, or calculation errors.",
+        "action": "Request an itemized breakdown from the vendor. Reconcile all line items with the total."
+    },
+    "INV_GSTIN_FORMAT": {
+        "title": "INVALID GSTIN FORMAT",
+        "icon": "🔏",
+        "description": "The GSTIN provided does not match the 15-character government standard.",
+        "implication": "Invalid GSTIN may indicate unregistered vendor or data entry error.",
+        "action": "Verify vendor GSTIN with the official GSTIN database (gstin.gov.in)."
+    },
+    "INV_GSTIN_MISSING": {
+        "title": "MISSING GSTIN",
+        "icon": "🔏",
+        "description": "Vendor GSTIN is not provided on the invoice.",
+        "implication": "Missing GSTIN violates GST compliance requirements for B2B transactions.",
+        "action": "Request vendor to provide valid GSTIN. Do not process without GST details."
+    },
+    "INV_PAN_MISSING": {
+        "title": "MISSING PAN",
+        "icon": "📋",
+        "description": "Vendor PAN (Permanent Account Number) is not provided.",
+        "implication": "PAN is required for TDS compliance and vendor verification.",
+        "action": "Request vendor PAN for TDS deduction purposes."
+    },
+    "INV_DUPLICATE_INVOICE": {
+        "title": "DUPLICATE INVOICE",
+        "icon": "⚠️",
+        "description": "This invoice number has been submitted previously.",
+        "implication": "Could indicate duplicate payment request or system error.",
+        "action": "Verify this is not a duplicate payment request. Check payment history."
+    },
+    "INV_SUSPICIOUS_DISCOUNT": {
+        "title": "UNUSUAL DISCOUNT",
+        "icon": "💸",
+        "description": "The discount applied appears unusually high for this transaction.",
+        "implication": "May indicate unauthorized discounting or pricing manipulation.",
+        "action": "Verify the discount is justified and has proper approval."
+    },
+    "INV_ROUND_AMOUNT": {
+        "title": "SUSPICIOUSLY ROUND AMOUNT",
+        "icon": "🎯",
+        "description": "Invoice total is an unusually round number.",
+        "implication": "Round amounts can indicate estimated billing rather than actual charges.",
+        "action": "Request detailed breakdown. Verify against purchase order or contract."
+    },
+    "INV_TAX_MISMATCH": {
+        "title": "TAX CALCULATION ERROR",
+        "icon": "📊",
+        "description": "Tax amount does not match expected calculation based on taxable amount.",
+        "implication": "Incorrect tax collection affects GST filing and input credit.",
+        "action": "Verify tax rates applied. Cross-check with HSN/SAC codes."
+    },
+    "INV_MISSING_SIGNATURE": {
+        "title": "MISSING DIGITAL SIGNATURE",
+        "icon": "📝",
+        "description": "Invoice lacks a digital signature.",
+        "implication": "Authenticity cannot be verified. Required for e-invoicing compliance.",
+        "action": "Request digitally signed invoice from authorized signatory."
+    },
+    "INV_MISSING_SEAL": {
+        "title": "MISSING PHYSICAL SEAL",
+        "icon": "🔒",
+        "description": "Invoice has no official seal from the vendor.",
+        "implication": "Reduces document authenticity verification.",
+        "action": "Request properly sealed document if organization policy requires it."
+    },
+    "INV_FUTURE_DATE": {
+        "title": "FUTURE DATED INVOICE",
+        "icon": "📅",
+        "description": "Invoice date is in the future.",
+        "implication": "Potential data entry error or attempt to manipulate accounting period.",
+        "action": "Verify correct invoice date with vendor."
+    },
+    "INV_STALE_INVOICE": {
+        "title": "STALE INVOICE",
+        "icon": "📅",
+        "description": "Invoice is unusually old.",
+        "implication": "May affect GST input credit eligibility. Raises questions about delayed submission.",
+        "action": "Verify reason for delayed submission. Check ITC eligibility."
+    },
+    "INV_HSN_MISSING": {
+        "title": "MISSING HSN/SAC CODES",
+        "icon": "🏷️",
+        "description": "Line items missing HSN/SAC classification codes.",
+        "implication": "Required for GST compliance and proper tax rate verification.",
+        "action": "Request vendor to provide HSN/SAC codes for all line items."
+    },
+    "AI_INVALID_STATUS": {
+        "title": "AI VALIDATION FAILED",
+        "icon": "🤖",
+        "description": "Automated validation systems flagged this document as invalid.",
+        "implication": "There may be format, extraction, or consistency issues.",
+        "action": "Review AI validation errors. Verify document quality and completeness."
+    },
+    "AI_FORMAT_INVALID": {
+        "title": "AI FORMAT VALIDATION FAILED",
+        "icon": "🤖",
+        "description": "Document format does not match expected invoice structure.",
+        "implication": "May indicate non-standard invoice or extraction errors.",
+        "action": "Verify document is a valid invoice. Re-process if needed."
+    },
+    "AI_FINANCIAL_INCONSISTENCY": {
+        "title": "AI FINANCIAL INCONSISTENCY",
+        "icon": "🤖",
+        "description": "AI detected that totals and calculations don't match.",
+        "implication": "Could indicate extraction errors or genuine calculation problems.",
+        "action": "Manually verify all amounts against source document."
+    },
+    "AI_MISSING_REQUIRED_FIELDS": {
+        "title": "AI MISSING FIELDS",
+        "icon": "🤖",
+        "description": "AI detected missing required invoice fields.",
+        "implication": "Incomplete invoice may not meet compliance requirements.",
+        "action": "Request complete invoice with all mandatory fields."
+    },
+    "AI_SUSPICIOUS_PATTERNS": {
+        "title": "AI SUSPICIOUS PATTERNS",
+        "icon": "🤖",
+        "description": "AI detected suspicious patterns in invoice data.",
+        "implication": "Patterns may indicate fraud or manipulation.",
+        "action": "Detailed manual review required. Cross-reference with historical data."
     }
+}
+
+
+class InvoiceAuditReportGenerator:
+    """
+    Invoice-Focused Audit Report Generator
     
-    try:
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            loaded = json.load(f)
-            # Merge with defaults
-            for key, value in default_config.items():
-                if key not in loaded:
-                    loaded[key] = value
-            return loaded
-    except FileNotFoundError:
-        print(f"⚠️  Config not found at {CONFIG_PATH}, using defaults")
-        return default_config
-    except json.JSONDecodeError as e:
-        print(f"⚠️  Config parse error: {e}, using defaults")
-        return default_config
+    Generates comprehensive audit reports for invoice documents including:
+    - Executive summary with risk assessment
+    - Key invoice data extraction
+    - Validation findings explanation
+    - Issue identification and implications
+    - Actionable recommendations
+    - AI-powered narrative generation (optional)
+    
+    Usage:
+        generator = InvoiceAuditReportGenerator(use_gemini=True)
+        report = generator.generate_audit_report(agent3_output)
+        generator.export_report(report, format='markdown')
+    """
 
-
-
-RISK_CONFIG = load_config()
-
-# Load Vendor Profiles
-VENDOR_PROFILES_PATH = os.path.join(os.path.dirname(__file__), 'vendor_profiles.json')
-VENDOR_PROFILES = {}
-try:
-    with open(VENDOR_PROFILES_PATH, 'r', encoding='utf-8') as f:
-        VENDOR_PROFILES = json.load(f)
-except Exception as e:
-    print(f"⚠️  Could not load vendor profiles: {e}")
-
-# Invoice-specific flags collection
-INVOICE_FLAGS = getattr(invoice_rules, 'ALL_FLAGS', [])
-
-
-
-class InvoiceFraudAnalyzer:
     SUPPORTED_DOC_TYPE = "INVOICE"
 
     def __init__(
         self,
-        history_index: Optional[Dict[str, Any]] = None,
-        use_gemini: bool = False,
+        api_key: Optional[str] = None,
+        use_gemini: bool = True,
         config: Optional[Dict[str, Any]] = None
     ):
         """
-        Initialize the Invoice Fraud Analyzer.
+        Initialize the Invoice Audit Report Generator.
         
         Args:
-            history_index: Historical data for duplicate/pattern detection (future use)
-            use_gemini: Enable Gemini-powered semantic analysis
-            config: Override default risk configuration
+            api_key: Gemini API key (defaults to GOOGLE_API_KEY env var)
+            use_gemini: Enable AI-powered narrative generation
+            config: Override default report configuration
         """
-        self.history = history_index or {}
-        self.config = config or RISK_CONFIG
-        
-        # Extract config values
-        self.severity_weights = self.config.get('severity_weights', {})
-        self.max_weight_per_flag = self.config.get('max_weight_per_flag', 3.0)
-        self.score_blending = self.config.get('score_blending', {})
-        self.risk_thresholds = self.config.get('risk_thresholds', {})
-        
-        # Pre-compute max possible score for normalization
-        self._max_score = self._compute_max_score()
-        
-        # Initialize Gemini analyzer if requested
+        self.api_key = api_key or os.getenv('GOOGLE_API_KEY')
         self.use_gemini = use_gemini
-        self.gemini: Optional[GeminiAnalyzer] = None
-        if use_gemini:
+        self.config = config or REPORT_CONFIG
+        self.client = None
+        
+        if self.use_gemini:
             self._init_gemini()
 
     def _init_gemini(self) -> None:
-        """Initialize Gemini semantic analyzer with error handling."""
+        """Initialize Gemini client with error handling."""
+        self.use_vertex = os.getenv('USE_VERTEX_AI', 'false').lower() == 'true'
+        
         try:
-            self.gemini = GeminiAnalyzer()
-            print("✅ Gemini semantic analyzer enabled for invoice analysis")
+            if self.use_vertex:
+                print("Using Vertex AI for reporting (Google Cloud)")
+                self.client = genai.Client(
+                    vertexai=True,
+                    project=os.getenv('GCP_PROJECT_ID'),
+                    location=os.getenv('GCP_LOCATION', 'us-central1')
+                )
+            else:
+                if not self.api_key:
+                    print("⚠️  Gemini API key not found. Falling back to template-based reports.")
+                    self.use_gemini = False
+                    return
+                self.client = genai.Client(api_key=self.api_key)
+            
+            self.model_name = self.config.get('gemini_model', 'gemini-2.5-flash')
+            print("✅ Gemini narrative generator enabled for invoice reports")
         except Exception as e:
             print(f"⚠️  Gemini initialization failed: {e}")
             self.use_gemini = False
-            self.gemini = None
+            self.client = None
 
-    def _compute_max_score(self) -> float:
-        """Compute maximum possible weight from all invoice flags."""
-        if not INVOICE_FLAGS:
-            return self.max_weight_per_flag
-        
-        max_weight = sum(
-            self.severity_weights.get(f.get('severity', 'medium'), 1.0)
-            for f in INVOICE_FLAGS
-        )
-        return max(max_weight, self.max_weight_per_flag)
-
-    def analyze(self, document: Dict[str, Any]) -> Dict[str, Any]:
+    def generate_audit_report(self, agent3_output: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Analyze an invoice document for fraud and compliance risks.
+        Generate comprehensive audit report from Agent3 fraud analysis output.
         
         Args:
-            document: Normalized invoice document from Agent2
+            agent3_output: Output from InvoiceFraudAnalyzer (Agent3)
             
         Returns:
-            Comprehensive risk assessment dictionary containing:
-            - fraud_score: 0-100 risk score
-            - risk_level: Human-readable risk classification
-            - triggered_flags: List of detected issues
-            - ai_signals: AI validation results (if present)
-            - semantic_analysis: Gemini analysis (if enabled)
-            - details: Score computation breakdown
+            Complete audit report dictionary
         """
         # Validate document type
-        validation_result = self._validate_document_type(document)
-        if validation_result:
-            return validation_result
-        
-        # Extract document data
-        doc_data = document.get('document', document)
-        
-        # Step 1: Run deterministic rule-based detection
-        flagged = self._detect_rule_based_flags(document)
-        
-        # Step 2: Extract and process AI validation signals
-        ai_signals = self._extract_ai_signals(document)
-        ai_flags = self._process_ai_signals(ai_signals)
-        flagged.extend(ai_flags)
-        
-        # Step 3: Compute base fraud score
-        base_score, score_details = self._compute_fraud_score(flagged)
-        
-        # Step 4: Optional semantic analysis and AI Cross-Examination via Gemini
-        semantic_analysis = None
-        final_score = base_score
-        
-        if self.use_gemini and self.gemini:
-            # Deep semantic analysis
-            semantic_analysis, final_score = self._apply_semantic_analysis(
-                doc_data, base_score, score_details
-            )
-            
-            # AI Cross-Examination of triggered flags
-            if flagged:
-                try:
-                    flagged = self.gemini.cross_examine_flags(flagged, doc_data)
-                    enriched_count = sum(1 for f in flagged if 'ai_audit_check' in f)
-                    if enriched_count > 0:
-                        print(f"✅ AI Cross-Examination enriched {enriched_count} flags")
-                    else:
-                        print("ℹ️  AI Cross-Examination completed with no new insights (rule-based only)")
-                except Exception as e:
-                    print(f"⚠️  AI Cross-Examination enrichment failed: {e}")
-
-        # Step 5: Build comprehensive result
-        return self._build_result(
-            fraud_score=final_score,
-            triggered_flags=flagged,
-            ai_signals=ai_signals,
-            semantic_analysis=semantic_analysis,
-            details=score_details
-        )
-
-    def _validate_document_type(self, document: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Validate that the document is an invoice. Returns error dict if not."""
-        doc_type = self._extract_document_type(document)
-        
-        if not doc_type:
-            return {
-                "error": "Document type not specified",
-                "supported_type": self.SUPPORTED_DOC_TYPE,
-                "fraud_score": None,
-                "risk_level": "UNKNOWN"
-            }
-        
+        doc_type = agent3_output.get('document_type', 'UNKNOWN')
         if doc_type != self.SUPPORTED_DOC_TYPE:
-            return {
-                "error": f"Unsupported document type: {doc_type}",
-                "supported_type": self.SUPPORTED_DOC_TYPE,
-                "fraud_score": None,
-                "risk_level": "UNSUPPORTED"
+            return self._generate_error_report(
+                f"Unsupported document type: {doc_type}. Only INVOICE documents supported."
+            )
+        
+        # Extract core data
+        fraud_score = agent3_output.get('fraud_score', 0)
+        risk_level = agent3_output.get('risk_level', 'UNKNOWN')
+        triggered_flags = agent3_output.get('triggered_flags', [])
+        ai_signals = agent3_output.get('ai_signals', {})
+        semantic_analysis = agent3_output.get('semantic_analysis')
+        summary = agent3_output.get('summary', {})
+        
+        # Extract invoice document data
+        document_data = self._extract_document_data(agent3_output)
+        
+        # Build report sections
+        report = {
+            'document_type': self.SUPPORTED_DOC_TYPE,
+            'generated_at': datetime.now().isoformat(),
+            'fraud_score': fraud_score,
+            'risk_level': self._normalize_risk_level(risk_level),
+            'flag_summary': summary,
+            'executive_summary': self._generate_executive_summary(fraud_score, risk_level),
+            'invoice_details': self._extract_invoice_details(document_data),
+            'validation_summary': self._generate_validation_summary(triggered_flags, ai_signals),
+            'issues_identified': self._identify_issues(triggered_flags, document_data),
+            'recommendations': self._generate_recommendations(triggered_flags, fraud_score),
+            'semantic_insights': self._format_semantic_insights(semantic_analysis),
+            'committee_resolution': self._format_committee_decision(agent3_output.get('committee_decision')),
+            'vendor_trust_profile': self._format_trust_analysis(agent3_output.get('trust_analysis')),
+            'audit_narrative': None,
+            'metadata': {
+                'agent_version': '4.0-invoice-focused',
+                'analysis_timestamp': datetime.now().isoformat(),
+                'total_flags': len(triggered_flags),
+                'gemini_enabled': self.use_gemini
             }
-        
-        return None  # Validation passed
-
-    def _extract_document_type(self, document: Dict[str, Any]) -> Optional[str]:
-        """Extract and normalize document type from various possible locations."""
-        doc_type = (
-            document.get('document', {}).get('document_type') or
-            document.get('document_type')
-        )
-        
-        if isinstance(doc_type, str):
-            return doc_type.upper().strip()
-        return None
-
-    def _detect_rule_based_flags(self, document: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Run invoice-specific rule-based fraud detection."""
-        try:
-            # Extract Vendor GSTIN to look up profile
-            doc = document.get('document', {})
-            vendor_gstin = doc.get('vendor', {}).get('gstin')
-            
-            # Find profile by GSTIN key (e.g. GSTIN_29...)
-            # The keys in vendor_profiles.json are like "GSTIN_29..." or just the GSTIN?
-            # Let's check the keys in the loaded dict.
-            # Based on previous file view, keys are "GSTIN_<GSTIN>"
-            
-            profile = None
-            if vendor_gstin:
-                # Try direct match or prefix match
-                if vendor_gstin in VENDOR_PROFILES:
-                    profile = VENDOR_PROFILES[vendor_gstin]
-                
-                # Try construction "GSTIN_<GSTIN>"
-                key = f"GSTIN_{vendor_gstin}"
-                if key in VENDOR_PROFILES:
-                    profile = VENDOR_PROFILES[key]
-
-            return invoice_rules.detect_flags(document, vendor_profile=profile)
-        except Exception as e:
-            print(f"⚠️  Rule detection error: {e}")
-            import traceback
-            traceback.print_exc()
-            return [{
-                "id": "RULE_DETECTION_ERROR",
-                "description": f"Error during rule-based detection: {str(e)}",
-                "severity": "medium",
-                "evidence": {"error": str(e)}
-            }]
-
-    def _extract_ai_signals(self, document: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract AI validation signals from various possible locations."""
-        ai_signals = (
-            document.get('ai_validation') or
-            document.get('validation', {}).get('ai_validation') or
-            document.get('document', {}).get('ai_validation') or
-            {}
-        )
-        return ai_signals if isinstance(ai_signals, dict) else {}
-
-    def _process_ai_signals(self, ai_signals: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Convert AI validation signals into fraud flags."""
-        flags = []
-        
-        if not ai_signals:
-            return flags
-        
-        status = ai_signals.get('status', '').upper()
-        checks = ai_signals.get('checks', {})
-        errors = ai_signals.get('errors', [])
-        warnings = ai_signals.get('warnings', [])
-        
-        # Flag: AI reports INVALID status
-        if status == 'INVALID':
-            flags.append({
-                "id": "AI_INVALID_STATUS",
-                "description": "AI validation marked document as INVALID",
-                "severity": "ai",
-                "category": "ai_validation",
-                "evidence": {
-                    "status": status,
-                    "errors": errors[:5],  # Limit evidence size
-                    "error_count": len(errors)
-                }
-            })
-        
-        # Flag: Format validation failed
-        if checks.get('format_validation') is False:
-            flags.append({
-                "id": "AI_FORMAT_INVALID",
-                "description": "AI detected format validation failures",
-                "severity": "ai",
-                "category": "ai_validation",
-                "evidence": {
-                    "check": "format_validation",
-                    "result": False,
-                    "related_errors": [e for e in errors if 'format' in str(e).lower()][:3]
-                }
-            })
-        
-        # Flag: Financial consistency check failed
-        if checks.get('financial_consistency') is False:
-            flags.append({
-                "id": "AI_FINANCIAL_INCONSISTENCY",
-                "description": "AI detected financial calculation inconsistencies",
-                "severity": "ai",
-                "category": "ai_validation",
-                "evidence": {
-                    "check": "financial_consistency",
-                    "result": False,
-                    "related_errors": [e for e in errors if 'amount' in str(e).lower() or 'total' in str(e).lower()][:3]
-                }
-            })
-        
-        # Flag: Required fields missing (AI detected)
-        if checks.get('required_fields') is False:
-            flags.append({
-                "id": "AI_MISSING_REQUIRED_FIELDS",
-                "description": "AI detected missing required invoice fields",
-                "severity": "high",
-                "category": "ai_validation",
-                "evidence": {
-                    "check": "required_fields",
-                    "result": False
-                }
-            })
-        
-        # Flag: Suspicious patterns detected by AI
-        if checks.get('suspicious_patterns') is True:
-            flags.append({
-                "id": "AI_SUSPICIOUS_PATTERNS",
-                "description": "AI detected suspicious patterns in invoice data",
-                "severity": "high",
-                "category": "ai_validation",
-                "evidence": {
-                    "check": "suspicious_patterns",
-                    "warnings": warnings[:5]
-                }
-            })
-        
-        return flags
-
-    def _compute_fraud_score(
-        self,
-        flags: List[Dict[str, Any]]
-    ) -> Tuple[float, Dict[str, Any]]:
-        """
-        Compute normalized fraud score (0-100) from triggered flags.
-        
-        Args:
-            flags: List of triggered fraud flags
-            
-        Returns:
-            Tuple of (score, details_dict)
-        """
-        if not flags:
-            return 0.0, {
-                "total_weight": 0.0,
-                "max_possible": self._max_score,
-                "flag_count": 0,
-                "weight_breakdown": {}
-            }
-        
-        # Calculate weights per severity
-        weight_breakdown = {}
-        total_weight = 0.0
-        
-        for flag in flags:
-            severity = flag.get('severity', 'medium')
-            weight = self.severity_weights.get(severity, 1.0)
-            total_weight += weight
-            
-            # Track breakdown
-            if severity not in weight_breakdown:
-                weight_breakdown[severity] = {"count": 0, "weight": 0.0}
-            weight_breakdown[severity]["count"] += 1
-            weight_breakdown[severity]["weight"] += weight
-        
-        # Normalize to 0-100 scale
-        if self._max_score <= 0:
-            fraud_score = 0.0
-        else:
-            fraud_score = min((total_weight / self._max_score) * 100.0, 100.0)
-        
-        details = {
-            "total_weight": round(total_weight, 2),
-            "max_possible": round(self._max_score, 2),
-            "flag_count": len(flags),
-            "weight_breakdown": weight_breakdown,
-            "normalization_factor": round(self._max_score, 2)
         }
         
-        return round(fraud_score, 2), details
-
-    def _apply_semantic_analysis(
-        self,
-        doc_data: Dict[str, Any],
-        base_score: float,
-        score_details: Dict[str, Any]
-    ) -> Tuple[Optional[Dict[str, Any]], float]:
-        """
-        Apply Gemini semantic analysis and blend with deterministic score.
-        
-        Args:
-            doc_data: Invoice document data
-            base_score: Deterministic fraud score
-            score_details: Details dict to update
-            
-        Returns:
-            Tuple of (semantic_analysis_result, blended_score)
-        """
-        try:
-            semantic_analysis = self.gemini.analyze(self.SUPPORTED_DOC_TYPE, doc_data)
-            
-            if semantic_analysis:
-                semantic_score = semantic_analysis.get('semantic_fraud_score', 0.0) * 100
-                
-                # Blend scores according to config
-                det_weight = self.score_blending.get('deterministic_weight', 0.7)
-                sem_weight = self.score_blending.get('semantic_weight', 0.3)
-                
-                blended_score = (base_score * det_weight) + (semantic_score * sem_weight)
-                blended_score = round(min(blended_score, 100.0), 2)
-                
-                # Update details
-                score_details['semantic_score'] = round(semantic_score, 2)
-                score_details['base_deterministic_score'] = base_score
-                score_details['blending_weights'] = {
-                    'deterministic': det_weight,
-                    'semantic': sem_weight
-                }
-                
-                return semantic_analysis, blended_score
-                
-        except Exception as e:
-            print(f"⚠️  Semantic analysis failed: {e}")
-            score_details['semantic_error'] = str(e)
-        
-        return None, base_score
-
-    def _determine_risk_level(self, score: float) -> str:
-        """Map fraud score to human-readable risk level."""
-        thresholds = self.risk_thresholds
-        
-        if score <= thresholds.get('safe', 20):
-            return 'Safe'
-        elif score <= thresholds.get('needs_review', 50):
-            return 'Needs Review'
-        elif score <= thresholds.get('high_risk', 75):
-            return 'High Risk'
+        # Generate narrative
+        if self.use_gemini and self.client:
+            try:
+                report['audit_narrative'] = self._generate_gemini_narrative(report, agent3_output)
+            except Exception as e:
+                print(f"⚠️  Narrative generation failed: {e}")
+                report['audit_narrative'] = self._generate_template_narrative(report)
         else:
-            return 'Likely Fraud / Reject'
+            report['audit_narrative'] = self._generate_template_narrative(report)
+        
+        return report
 
-    def _build_result(
-        self,
-        fraud_score: float,
-        triggered_flags: List[Dict[str, Any]],
-        ai_signals: Dict[str, Any],
-        semantic_analysis: Optional[Dict[str, Any]],
-        details: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Build the final analysis result dictionary."""
-        
-        # Categorize flags
-        flags_by_severity = {}
-        flags_by_category = {}
-        
-        for flag in triggered_flags:
-            # By severity
-            sev = flag.get('severity', 'medium')
-            if sev not in flags_by_severity:
-                flags_by_severity[sev] = []
-            flags_by_severity[sev].append(flag['id'])
-            
-            # By category
-            cat = flag.get('category', 'general')
-            if cat not in flags_by_category:
-                flags_by_category[cat] = []
-            flags_by_category[cat].append(flag['id'])
-        
+    def _generate_error_report(self, error_message: str) -> Dict[str, Any]:
+        """Generate error report for invalid inputs."""
         return {
-            "document_type": self.SUPPORTED_DOC_TYPE,
-            "fraud_score": fraud_score,
-            "risk_level": self._determine_risk_level(fraud_score),
-            "summary": {
-                "total_flags": len(triggered_flags),
-                "critical_flags": len(flags_by_severity.get('critical', [])),
-                "high_flags": len(flags_by_severity.get('high', [])),
-                "ai_flags": len(flags_by_severity.get('ai', [])),
-                "flags_by_category": flags_by_category
-            },
-            "triggered_flags": triggered_flags,
-            "ai_signals": ai_signals if ai_signals else None,
-            "semantic_analysis": semantic_analysis,
-            "details": details,
-            "recommendations": self._generate_recommendations(fraud_score, triggered_flags)
+            'document_type': 'ERROR',
+            'generated_at': datetime.now().isoformat(),
+            'error': error_message,
+            'fraud_score': None,
+            'risk_level': 'ERROR',
+            'executive_summary': f"❌ REPORT GENERATION FAILED\n\n{error_message}",
+            'invoice_details': {},
+            'validation_summary': "",
+            'issues_identified': [error_message],
+            'recommendations': ["Verify document type and resubmit."],
+            'audit_narrative': f"Report generation failed: {error_message}"
         }
+
+    def _extract_document_data(self, agent3_output: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract invoice document data from various possible locations."""
+        # Try different possible locations for document data
+        if 'document' in agent3_output and isinstance(agent3_output['document'], dict):
+            return agent3_output['document']
+        
+        # Fallback: use agent3_output itself
+        return agent3_output
+
+    def _normalize_risk_level(self, risk_level: str) -> str:
+        """Normalize risk level to standard format."""
+        level_mapping = {
+            'safe': 'APPROVED',
+            'approved': 'APPROVED',
+            'needs review': 'NEEDS_REVIEW',
+            'needs_review': 'NEEDS_REVIEW',
+            'high risk': 'HIGH_RISK',
+            'high_risk': 'HIGH_RISK',
+            'likely fraud / reject': 'REJECT',
+            'likely_fraud': 'REJECT',
+            'reject': 'REJECT'
+        }
+        return level_mapping.get(risk_level.lower(), risk_level.upper())
+
+    def _generate_executive_summary(self, fraud_score: float, risk_level: str) -> str:
+        """Generate executive summary section."""
+        normalized_level = self._normalize_risk_level(risk_level)
+        
+        # Determine status message and icon
+        status_messages = {
+            'APPROVED': ("✅", "Invoice appears compliant with government standards and GST requirements."),
+            'NEEDS_REVIEW': ("⚠️", "Invoice requires manual verification before payment processing."),
+            'HIGH_RISK': ("🔶", "Invoice shows significant compliance issues. Escalate to compliance team."),
+            'REJECT': ("❌", "Invoice flagged for potential fraud or serious non-compliance. Recommend rejection.")
+        }
+        
+        icon, status = status_messages.get(normalized_level, ("❓", "Invoice status requires review."))
+        
+        # Risk score interpretation
+        if fraud_score <= 20:
+            score_interpretation = "LOW RISK - Document shows minimal compliance concerns."
+        elif fraud_score <= 50:
+            score_interpretation = "MODERATE RISK - Some issues require attention before approval."
+        elif fraud_score <= 75:
+            score_interpretation = "HIGH RISK - Multiple compliance failures detected."
+        else:
+            score_interpretation = "CRITICAL RISK - Strong indicators of fraud or non-compliance."
+        
+        return f"""
+╔══════════════════════════════════════════════════════════════════════╗
+║                         EXECUTIVE SUMMARY                             ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+Document Type:        INVOICE
+Risk Assessment Score: {fraud_score:.2f} / 100
+Risk Classification:   {normalized_level}
+
+{icon} STATUS: {status}
+
+📊 RISK INTERPRETATION:
+{score_interpretation}
+
+This invoice has been analyzed against:
+  • GST compliance requirements (GSTIN, HSN codes, tax calculations)
+  • Financial accuracy (amount reconciliation, tax verification)
+  • Document authenticity (signatures, seals, format)
+  • Fraud indicators (duplicate detection, suspicious patterns)
+
+Key findings and actionable recommendations follow.
+"""
+
+    def _extract_invoice_details(self, document_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract and format key invoice data points."""
+        
+        # Helper for safe nested access
+        def safe_get(data: Dict, keys: List[str], default: Any = None) -> Any:
+            current = data
+            for key in keys:
+                if isinstance(current, dict):
+                    current = current.get(key)
+                else:
+                    return default
+            if isinstance(current, dict) and 'value' in current:
+                return current.get('value')
+            return current if current is not None else default
+        
+        # Extract amounts
+        amounts = document_data.get('amounts', {})
+        
+        # Format line items
+        line_items = document_data.get('line_items', [])
+        items_formatted = self._format_line_items(line_items)
+        
+        # Format tax breakdown
+        tax_breakdown = self._format_tax_breakdown(amounts)
+        
+        # Build invoice details
+        details = {
+            # Vendor Information
+            'vendor_name': safe_get(document_data, ['vendor', 'name'], 'Not specified'),
+            'vendor_gstin': safe_get(document_data, ['vendor', 'gstin'], '❌ Missing'),
+            'vendor_pan': safe_get(document_data, ['vendor', 'pan'], 'Not specified'),
+            'vendor_address': safe_get(document_data, ['vendor', 'address'], 'Not specified'),
+            
+            # Buyer Information
+            'buyer_name': safe_get(document_data, ['buyer', 'name'], 'Not specified'),
+            'buyer_gstin': safe_get(document_data, ['buyer', 'gstin'], 'Not specified'),
+            'buyer_address': safe_get(document_data, ['buyer', 'address'], 'Not specified'),
+            
+            # Invoice Details
+            'invoice_number': safe_get(document_data, ['invoice_number']) or 
+                            safe_get(document_data, ['document_id'], 'Not specified'),
+            'invoice_date': safe_get(document_data, ['invoice_date'], 'Not specified'),
+            'due_date': safe_get(document_data, ['due_date']) or 
+                       safe_get(document_data, ['payment_due_date'], 'Not specified'),
+            
+            # Financial Details
+            'subtotal': self._format_currency(safe_get(amounts, ['subtotal'], 0)),
+            'taxable_amount': self._format_currency(safe_get(amounts, ['taxable_amount'], 0)),
+            'tax_breakdown': tax_breakdown,
+            'total_tax': self._format_currency(safe_get(amounts, ['tax_amount'], 0)),
+            'discount': self._format_currency(safe_get(amounts, ['discount'], 0)),
+            'total_amount': self._format_currency(safe_get(amounts, ['total_amount'], 0)),
+            
+            # Line Items
+            'line_items': items_formatted,
+            'line_item_count': len(line_items),
+            
+            # Authentication
+            'digital_signature': '✅ Present' if safe_get(document_data, ['authentication', 'has_digital_signature']) else '❌ Missing',
+            'physical_seal': '✅ Present' if safe_get(document_data, ['authentication', 'has_seal']) or 
+                                           safe_get(document_data, ['authentication', 'has_physical_seal']) else '❌ Missing',
+            'signature_valid': '✅ Valid' if safe_get(document_data, ['authentication', 'signature_valid']) else '❓ Not verified',
+            
+            # Payment Terms
+            'payment_terms': safe_get(document_data, ['payment_terms'], 'Not specified'),
+            'bank_details': safe_get(document_data, ['bank_details'], 'Not specified'),
+        }
+        
+        # Filter out None and empty values for cleaner output
+        return {k: v for k, v in details.items() if v is not None and v != '' and v != '₹0.00'}
+
+    def _format_currency(self, amount: Any) -> str:
+        """Format amount as Indian Rupees."""
+        try:
+            if isinstance(amount, dict):
+                amount = amount.get('value', 0)
+            return f"₹{float(amount):,.2f}"
+        except (ValueError, TypeError):
+            return "₹0.00"
+
+    def _format_line_items(self, line_items: List[Dict[str, Any]]) -> str:
+        """Format line items as readable text."""
+        if not line_items:
+            return "No line items specified"
+        
+        formatted = []
+        for i, item in enumerate(line_items, 1):
+            desc = item.get('description', 'Unknown item')
+            qty = item.get('quantity', 'N/A')
+            unit = item.get('unit', 'units')
+            unit_price = item.get('unit_price', 0)
+            total = item.get('total_amount') or item.get('amount', 0)
+            hsn = item.get('hsn_code', '')
+            
+            line = f"  {i}. {desc}"
+            if hsn:
+                line += f" [HSN: {hsn}]"
+            line += f"\n     Qty: {qty} {unit} × ₹{unit_price:,.2f} = ₹{total:,.2f}"
+            formatted.append(line)
+        
+        return "\n" + "\n".join(formatted)
+
+    def _format_tax_breakdown(self, amounts: Dict[str, Any]) -> str:
+        """Format tax breakdown."""
+        taxes = []
+        
+        cgst = amounts.get('cgst', 0)
+        sgst = amounts.get('sgst', 0)
+        igst = amounts.get('igst', 0)
+        cess = amounts.get('cess', 0)
+        
+        if cgst:
+            taxes.append(f"CGST: ₹{cgst:,.2f}")
+        if sgst:
+            taxes.append(f"SGST: ₹{sgst:,.2f}")
+        if igst:
+            taxes.append(f"IGST: ₹{igst:,.2f}")
+        if cess:
+            taxes.append(f"Cess: ₹{cess:,.2f}")
+        
+        return " | ".join(taxes) if taxes else "Tax details not specified"
+
+    def _generate_validation_summary(
+        self,
+        triggered_flags: List[Dict[str, Any]],
+        ai_signals: Dict[str, Any]
+    ) -> str:
+        """Generate human-readable validation summary."""
+        
+        if not triggered_flags and not ai_signals:
+            return "✅ VALIDATION PASSED\n\nNo compliance issues detected during automated validation."
+        
+        summary = """
+╔══════════════════════════════════════════════════════════════════════╗
+║                       VALIDATION SUMMARY                              ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+"""
+        
+        # AI Validation Status
+        if ai_signals:
+            status = ai_signals.get('status', 'UNKNOWN')
+            errors = ai_signals.get('errors', [])
+            checks = ai_signals.get('checks', {})
+            
+            if status == 'INVALID':
+                summary += "🤖 AI VALIDATION STATUS: ❌ INVALID\n"
+                if errors:
+                    summary += f"   Errors: {', '.join(errors[:3])}\n"
+                summary += "\n"
+            elif status == 'VALID':
+                summary += "🤖 AI VALIDATION STATUS: ✅ VALID\n\n"
+            
+            # Individual checks
+            check_results = []
+            if 'format_validation' in checks:
+                icon = "✅" if checks['format_validation'] else "❌"
+                check_results.append(f"   {icon} Format Validation")
+            if 'financial_consistency' in checks:
+                icon = "✅" if checks['financial_consistency'] else "❌"
+                check_results.append(f"   {icon} Financial Consistency")
+            if 'required_fields' in checks:
+                icon = "✅" if checks['required_fields'] else "❌"
+                check_results.append(f"   {icon} Required Fields")
+            
+            if check_results:
+                summary += "   Automated Checks:\n" + "\n".join(check_results) + "\n\n"
+        
+        # Triggered Flags Summary
+        if triggered_flags:
+            summary += f"📋 COMPLIANCE FLAGS TRIGGERED: {len(triggered_flags)}\n\n"
+            
+            # Group by severity
+            by_severity = {}
+            for flag in triggered_flags:
+                sev = flag.get('severity', 'medium').upper()
+                if sev not in by_severity:
+                    by_severity[sev] = []
+                by_severity[sev].append(flag)
+            
+            # Display in order of severity
+            severity_order = ['CRITICAL', 'HIGH', 'AI', 'MEDIUM', 'LOW']
+            for severity in severity_order:
+                if severity in by_severity:
+                    icon = self.config['severity_icons'].get(severity.lower(), '❓')
+                    summary += f"   {icon} {severity}: {len(by_severity[severity])} flag(s)\n"
+                    for flag in by_severity[severity]:
+                        summary += f"      • {flag.get('id', 'Unknown')}\n"
+            
+            summary += "\n"
+        
+        return summary
+
+    def _identify_issues(
+        self,
+        triggered_flags: List[Dict[str, Any]],
+        document_data: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Identify and explain all issues found."""
+        issues = []
+        
+        # Process triggered flags
+        for flag in triggered_flags:
+            flag_id = flag.get('id', 'UNKNOWN')
+            severity = flag.get('severity', 'medium')
+            evidence = flag.get('evidence', {})
+            
+            # Get explanation from our knowledge base
+            explanation = INVOICE_FLAG_EXPLANATIONS.get(flag_id)
+            
+            if explanation:
+                issue = {
+                    'flag_id': flag_id,
+                    'severity': severity.upper(),
+                    'icon': explanation['icon'],
+                    'title': explanation['title'],
+                    'description': explanation['description'],
+                    'implication': explanation['implication'],
+                    'recommended_action': explanation['action'],
+                    'evidence': evidence
+                }
+            else:
+                # Generic handling for unknown flags
+                issue = {
+                    'flag_id': flag_id,
+                    'severity': severity.upper(),
+                    'icon': '⚠️',
+                    'title': flag_id.replace('_', ' ').title(),
+                    'description': flag.get('description', 'Issue detected during validation.'),
+                    'implication': 'This issue may affect invoice processing or compliance.',
+                    'recommended_action': 'Review and address before approval.',
+                    'evidence': evidence
+                }
+            
+            issues.append(issue)
+        
+        # Check for missing authentication (even if not flagged)
+        auth = document_data.get('authentication', {})
+        if not auth.get('has_digital_signature') and not any(i['flag_id'] == 'INV_MISSING_SIGNATURE' for i in issues):
+            issues.append({
+                'flag_id': 'OBSERVATION_NO_SIGNATURE',
+                'severity': 'OBSERVATION',
+                'icon': '📝',
+                'title': 'Digital Signature Not Present',
+                'description': 'Invoice does not have a digital signature.',
+                'implication': 'Authenticity verification is limited without digital signature.',
+                'recommended_action': 'Consider requesting signed invoice for high-value transactions.',
+                'evidence': {}
+            })
+        
+        return issues
 
     def _generate_recommendations(
         self,
-        score: float,
-        flags: List[Dict[str, Any]]
-    ) -> List[str]:
-        """Generate actionable recommendations based on analysis results."""
+        triggered_flags: List[Dict[str, Any]],
+        fraud_score: float
+    ) -> List[Dict[str, Any]]:
+        """Generate prioritized, actionable recommendations."""
         recommendations = []
         
-        risk_level = self._determine_risk_level(score)
-        
-        if risk_level == 'Safe':
-            recommendations.append("Invoice appears compliant. Standard processing recommended.")
-        elif risk_level == 'Needs Review':
-            recommendations.append("Manual review recommended before processing.")
-        elif risk_level == 'High Risk':
-            recommendations.append("Detailed investigation required. Escalate to compliance team.")
+        # Primary recommendation based on risk level
+        if fraud_score >= 80:
+            recommendations.append({
+                'priority': 1,
+                'icon': '🛑',
+                'category': 'IMMEDIATE_ACTION',
+                'action': 'REJECT this invoice. Do not process payment.',
+                'reason': 'Critical fraud indicators detected. Requires legal/compliance review.',
+                'escalate_to': 'Compliance Officer / Legal Team'
+            })
+        elif fraud_score >= 50:
+            recommendations.append({
+                'priority': 1,
+                'icon': '⚠️',
+                'category': 'MANUAL_REVIEW',
+                'action': 'Hold payment pending manual verification.',
+                'reason': 'Multiple compliance issues require human review.',
+                'escalate_to': 'Finance Supervisor'
+            })
+        elif fraud_score >= 20:
+            recommendations.append({
+                'priority': 1,
+                'icon': '🔍',
+                'category': 'VERIFY_AND_PROCEED',
+                'action': 'Verify flagged items before approval.',
+                'reason': 'Minor issues detected that should be addressed.',
+                'escalate_to': None
+            })
         else:
-            recommendations.append("REJECT: High fraud probability. Do not process without senior approval.")
+            recommendations.append({
+                'priority': 1,
+                'icon': '✅',
+                'category': 'APPROVED',
+                'action': 'Invoice may be processed for payment.',
+                'reason': 'No significant compliance issues detected.',
+                'escalate_to': None
+            })
         
         # Flag-specific recommendations
-        flag_ids = {f['id'] for f in flags}
+        flag_ids = {f.get('id', '') for f in triggered_flags}
         
-        if 'MISSING_GSTIN' in flag_ids or 'AI_MISSING_REQUIRED_FIELDS' in flag_ids:
-            recommendations.append("Request vendor to provide valid GSTIN for GST compliance.")
+        if any('GSTIN' in fid for fid in flag_ids):
+            recommendations.append({
+                'priority': 2,
+                'icon': '🔏',
+                'category': 'GST_COMPLIANCE',
+                'action': 'Verify vendor GSTIN at gstin.gov.in before processing.',
+                'reason': 'Invalid or missing GSTIN affects GST input credit.',
+                'escalate_to': None
+            })
         
-        if 'TAX_CALCULATION_MISMATCH' in flag_ids or 'AI_FINANCIAL_INCONSISTENCY' in flag_ids:
-            recommendations.append("Verify tax calculations manually. Cross-check with rate schedules.")
+        if any('AMOUNT' in fid or 'FINANCIAL' in fid for fid in flag_ids):
+            recommendations.append({
+                'priority': 2,
+                'icon': '🧮',
+                'category': 'FINANCIAL_VERIFICATION',
+                'action': 'Request itemized breakdown and reconcile all amounts.',
+                'reason': 'Amount discrepancies must be resolved before payment.',
+                'escalate_to': None
+            })
         
-        if 'MISSING_SIGNATURE' in flag_ids:
-            recommendations.append("Obtain digitally signed invoice copy for audit trail.")
+        if any('DUPLICATE' in fid for fid in flag_ids):
+            recommendations.append({
+                'priority': 2,
+                'icon': '🔄',
+                'category': 'DUPLICATE_CHECK',
+                'action': 'Check payment history for this invoice number.',
+                'reason': 'Duplicate payment must be prevented.',
+                'escalate_to': 'Accounts Payable'
+            })
         
-        if 'ROUND_AMOUNT_SUSPICIOUS' in flag_ids:
-            recommendations.append("Verify pricing against contract or purchase order.")
+        if any('SIGNATURE' in fid for fid in flag_ids):
+            recommendations.append({
+                'priority': 3,
+                'icon': '📝',
+                'category': 'AUTHENTICATION',
+                'action': 'Request digitally signed invoice for audit trail.',
+                'reason': 'Digital signature required for e-invoicing compliance.',
+                'escalate_to': None
+            })
         
-        if 'AI_SUSPICIOUS_PATTERNS' in flag_ids:
-            recommendations.append("Cross-reference with historical vendor transactions.")
+        if any('HSN' in fid for fid in flag_ids):
+            recommendations.append({
+                'priority': 3,
+                'icon': '🏷️',
+                'category': 'HSN_COMPLIANCE',
+                'action': 'Request HSN/SAC codes for all line items.',
+                'reason': 'HSN codes required for GST filing.',
+                'escalate_to': None
+            })
+        
+        # Sort by priority
+        recommendations.sort(key=lambda x: x['priority'])
         
         return recommendations
+
+    def _format_semantic_insights(
+        self,
+        semantic_analysis: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Format semantic analysis insights if available."""
+        if not semantic_analysis:
+            return None
+        
+        return {
+            'semantic_fraud_score': semantic_analysis.get('semantic_fraud_score', 0) * 100,
+            'risk_indicators': semantic_analysis.get('risk_indicators', []),
+            'confidence': semantic_analysis.get('confidence', 'N/A'),
+            'analysis_notes': semantic_analysis.get('notes', [])
+        }
+
+    def _format_committee_decision(self, decision: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Format Agent 6 committee decision."""
+        if not decision:
+            return None
+        return {
+            'final_risk_level': decision.get('final_risk_level'),
+            'decision_basis': decision.get('decision_basis'),
+            'confidence': decision.get('confidence', 1.0)
+        }
+
+    def _format_trust_analysis(self, trust: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Format Agent 5 vendor trust analysis."""
+        if not trust:
+            return None
+        return {
+            'trust_score': trust.get('trust_score'),
+            'trust_level': trust.get('trust_level'),
+            'trend': trust.get('trend'),
+            'historical_average': trust.get('historical_average'),
+            'recommendations': trust.get('recommendations', [])
+        }
+
+    def _generate_gemini_narrative(
+        self,
+        report: Dict[str, Any],
+        agent3_output: Dict[str, Any]
+    ) -> str:
+        """Generate comprehensive audit narrative via Gemini."""
+        
+        # Format issues for prompt
+        issues_text = "\n".join([
+            f"- {issue['title']}: {issue['description']}"
+            for issue in report['issues_identified'][:10]
+        ])
+        
+        # Format recommendations for prompt
+        rec_text = "\n".join([
+            f"- [{rec['category']}] {rec['action']}"
+            for rec in report['recommendations'][:5]
+        ])
+        
+        prompt = f"""You are a government auditor writing a compliance review report for an invoice.
+
+Generate a professional, audit-ready narrative report based on this analysis:
+
+FRAUD RISK SCORE: {report['fraud_score']}/100
+RISK CLASSIFICATION: {report['risk_level']}
+
+INVOICE DETAILS:
+- Vendor: {report['invoice_details'].get('vendor_name', 'Unknown')}
+- Vendor GSTIN: {report['invoice_details'].get('vendor_gstin', 'Not specified')}
+- Invoice Number: {report['invoice_details'].get('invoice_number', 'Unknown')}
+- Invoice Date: {report['invoice_details'].get('invoice_date', 'Unknown')}
+- Total Amount: {report['invoice_details'].get('total_amount', 'Unknown')}
+
+ISSUES IDENTIFIED:
+{issues_text if issues_text else "No significant issues found."}
+
+RECOMMENDATIONS:
+{rec_text}
+
+COMMITTEE RESOLUTION (AGENT 6):
+{json.dumps(report.get('committee_resolution'), indent=2) if report.get('committee_resolution') else "Consensus reached by all agents."}
+
+VENDOR TRUST PROFILE (AGENT 5):
+{json.dumps(report.get('vendor_trust_profile'), indent=2) if report.get('vendor_trust_profile') else "New vendor profile initialized."}
+
+Write a 300-400 word professional audit narrative that:
+1. Opens with a clear assessment statement
+2. Summarizes what was reviewed and key invoice details
+3. Explains the issues found in business language (not technical jargon)
+4. Describes the risk implications for payment processing
+5. Concludes with clear next steps and approval recommendation
+
+The narrative should be suitable for government procurement officers.
+Use formal but clear language. Include specific amounts where relevant.
+Format as plain text paragraphs. Do not use markdown or JSON formatting.
+
+IMPORTANT: Write ONLY the narrative text. No headers, bullets, or formatting."""
+
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=self.config.get('narrative_temperature', 0.5),
+                    max_output_tokens=self.config.get('narrative_max_tokens', 1000),
+                )
+            )
+            return response.text.strip()
+        except Exception as e:
+            print(f"⚠️  Gemini narrative generation failed: {e}")
+            return self._generate_template_narrative(report)
+
+    def _generate_template_narrative(self, report: Dict[str, Any]) -> str:
+        """Generate template-based narrative when Gemini is unavailable."""
+        
+        fraud_score = report['fraud_score']
+        risk_level = report['risk_level']
+        details = report['invoice_details']
+        issues = report['issues_identified']
+        recommendations = report['recommendations']
+        
+        # Determine assessment statement
+        if risk_level == 'APPROVED':
+            assessment = "This invoice has passed automated compliance verification and is recommended for payment processing."
+        elif risk_level == 'NEEDS_REVIEW':
+            assessment = "This invoice requires manual verification before payment authorization due to compliance concerns."
+        elif risk_level == 'HIGH_RISK':
+            assessment = "This invoice shows significant compliance issues and should be escalated to the compliance team."
+        else:
+            assessment = "This invoice is NOT recommended for payment. Critical compliance failures or fraud indicators detected."
+        
+        narrative = f"""AUDIT NARRATIVE REPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Generated: {report['generated_at']}
+
+ASSESSMENT SUMMARY:
+{assessment}
+
+DOCUMENT REVIEWED:
+This audit covers Invoice {details.get('invoice_number', 'N/A')} dated {details.get('invoice_date', 'N/A')}, 
+submitted by {details.get('vendor_name', 'Unknown Vendor')} (GSTIN: {details.get('vendor_gstin', 'Not provided')}) 
+for a total amount of {details.get('total_amount', 'N/A')}.
+
+COMPLIANCE ANALYSIS:
+The invoice was evaluated against government procurement standards including GST compliance, 
+financial accuracy, document authenticity, and fraud detection rules. The analysis yielded 
+a fraud risk score of {fraud_score:.1f} out of 100, resulting in a {risk_level} classification.
+
+"""
+        
+        # Add issues section
+        if issues:
+            narrative += f"ISSUES IDENTIFIED ({len(issues)}):\n"
+            for i, issue in enumerate(issues[:5], 1):
+                narrative += f"{i}. {issue['icon']} {issue['title']}\n"
+                narrative += f"   {issue['description']}\n"
+                narrative += f"   Implication: {issue['implication']}\n\n"
+        else:
+            narrative += "ISSUES IDENTIFIED:\nNo material compliance issues were detected during review.\n\n"
+        
+        # Add recommendations
+        narrative += "RECOMMENDED ACTIONS:\n"
+        for i, rec in enumerate(recommendations[:4], 1):
+            narrative += f"{i}. {rec['icon']} [{rec['category']}]\n"
+            narrative += f"   {rec['action']}\n"
+            if rec.get('escalate_to'):
+                narrative += f"   Escalate to: {rec['escalate_to']}\n"
+            narrative += "\n"
+        
+        # Conclusion
+        narrative += f"""CONCLUSION:
+Based on this comprehensive review, the invoice status is: {risk_level}
+
+• APPROVED: Proceed with payment processing per standard procedures.
+• NEEDS_REVIEW: Forward to supervisor with this report for verification.
+• HIGH_RISK: Escalate to compliance team. Do not process without approval.
+• REJECT: Do not process. Initiate investigation per fraud protocols.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+This report was generated by the Invoice Audit System v4.0
+Retain as part of official procurement records.
+"""
+        
+        return narrative
+
+    def export_report(
+        self,
+        report: Dict[str, Any],
+        format: Literal['json', 'txt', 'markdown'] = 'json',
+        output_path: Optional[str] = None
+    ) -> str:
+        """
+        Export audit report to file.
+        
+        Args:
+            report: Generated audit report
+            format: Output format ('json', 'txt', 'markdown')
+            output_path: Custom output path (auto-generated if not specified)
+            
+        Returns:
+            Path to exported file
+        """
+        # Generate filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        invoice_num = report.get('invoice_details', {}).get('invoice_number', 'UNKNOWN')
+        invoice_num = str(invoice_num).replace('/', '-').replace('\\', '-')[:20]
+        base_name = f"invoice_audit_{invoice_num}_{timestamp}"
+        
+        if format == 'json':
+            return self._export_json(report, output_path or f"{base_name}.json")
+        elif format == 'txt':
+            return self._export_txt(report, output_path or f"{base_name}.txt")
+        elif format == 'markdown':
+            return self._export_markdown(report, output_path or f"{base_name}.md")
+        else:
+            raise ValueError(f"Unsupported format: {format}")
+
+    def _export_json(self, report: Dict[str, Any], path: str) -> str:
+        """Export as JSON."""
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(report, f, indent=2, default=str, ensure_ascii=False)
+        return path
+
+    def _export_txt(self, report: Dict[str, Any], path: str) -> str:
+        """Export as plain text."""
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(report['executive_summary'])
+            f.write("\n\n")
+            
+            f.write("INVOICE DETAILS\n")
+            f.write("─" * 60 + "\n")
+            for key, value in report['invoice_details'].items():
+                # Format key nicely
+                display_key = key.replace('_', ' ').title()
+                f.write(f"{display_key}: {value}\n")
+            f.write("\n")
+            
+            f.write(report['validation_summary'])
+            f.write("\n")
+            
+            f.write("ISSUES IDENTIFIED\n")
+            f.write("─" * 60 + "\n")
+            for issue in report['issues_identified']:
+                f.write(f"\n{issue['icon']} [{issue['severity']}] {issue['title']}\n")
+                f.write(f"   {issue['description']}\n")
+                f.write(f"   Implication: {issue['implication']}\n")
+                f.write(f"   Action: {issue['recommended_action']}\n")
+            f.write("\n")
+            
+            f.write("RECOMMENDATIONS\n")
+            f.write("─" * 60 + "\n")
+            for rec in report['recommendations']:
+                f.write(f"\n{rec['icon']} [{rec['category']}]\n")
+                f.write(f"   {rec['action']}\n")
+                if rec.get('reason'):
+                    f.write(f"   Reason: {rec['reason']}\n")
+            f.write("\n\n")
+            
+            f.write("AUDIT NARRATIVE\n")
+            f.write("─" * 60 + "\n")
+            f.write(report['audit_narrative'])
+        
+        return path
+
+    def _export_markdown(self, report: Dict[str, Any], path: str) -> str:
+        """Export as Markdown."""
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write("# Invoice Audit Report\n\n")
+            f.write(f"**Generated:** {report['generated_at']}\n\n")
+            
+            f.write("## Risk Assessment\n\n")
+            f.write(f"| Metric | Value |\n")
+            f.write(f"|--------|-------|\n")
+            f.write(f"| **Fraud Score** | {report['fraud_score']}/100 |\n")
+            f.write(f"| **Risk Level** | {report['risk_level']} |\n")
+            f.write(f"| **Total Flags** | {report['flag_summary'].get('total_flags', 0)} |\n\n")
+            
+            f.write("## Invoice Details\n\n")
+            f.write("| Field | Value |\n")
+            f.write("|-------|-------|\n")
+            for key, value in report['invoice_details'].items():
+                display_key = key.replace('_', ' ').title()
+                # Escape pipe characters in value
+                value_str = str(value).replace('|', '\\|').replace('\n', '<br>')
+                f.write(f"| {display_key} | {value_str} |\n")
+            f.write("\n")
+            
+            f.write("## Issues Identified\n\n")
+            for issue in report['issues_identified']:
+                f.write(f"### {issue['icon']} {issue['title']}\n\n")
+                f.write(f"**Severity:** {issue['severity']}\n\n")
+                f.write(f"{issue['description']}\n\n")
+                f.write(f"**Implication:** {issue['implication']}\n\n")
+                f.write(f"**Recommended Action:** {issue['recommended_action']}\n\n")
+            
+            f.write("## Recommendations\n\n")
+            for i, rec in enumerate(report['recommendations'], 1):
+                f.write(f"{i}. **{rec['icon']} {rec['category']}**\n")
+                f.write(f"   - {rec['action']}\n")
+                if rec.get('reason'):
+                    f.write(f"   - *Reason:* {rec['reason']}\n")
+                if rec.get('escalate_to'):
+                    f.write(f"   - *Escalate to:* {rec['escalate_to']}\n")
+                f.write("\n")
+            
+            f.write("## Audit Narrative\n\n")
+            f.write(report['audit_narrative'])
+            f.write("\n\n---\n")
+            f.write("*Report generated by Invoice Audit System v4.0*\n")
+        
+        return path
 
 
 # =============================================================================
 # BACKWARD COMPATIBILITY ALIAS
 # =============================================================================
 
-# Alias for backward compatibility with existing code expecting 'Agent3'
-Agent3 = InvoiceFraudAnalyzer
+Agent4 = InvoiceAuditReportGenerator
 
 
 # =============================================================================
 # DEMO / CLI RUNNER
 # =============================================================================
 
-def create_sample_invoice() -> Dict[str, Any]:
-    """Create a sample invoice for testing."""
+def create_sample_agent3_output() -> Dict[str, Any]:
+    """Create sample Agent3 output for testing."""
     return {
+        "document_type": "INVOICE",
+        "fraud_score": 45.5,
+        "risk_level": "Needs Review",
+        "summary": {
+            "total_flags": 4,
+            "critical_flags": 0,
+            "high_flags": 2,
+            "ai_flags": 1
+        },
+        "triggered_flags": [
+            {
+                "id": "INV_GSTIN_MISSING",
+                "description": "Vendor GSTIN is not provided",
+                "severity": "high",
+                "evidence": {"field": "vendor.gstin", "value": None}
+            },
+            {
+                "id": "INV_MISSING_SIGNATURE",
+                "description": "Invoice lacks digital signature",
+                "severity": "medium",
+                "evidence": {}
+            },
+            {
+                "id": "INV_TAX_MISMATCH",
+                "description": "Tax calculation does not match expected amount",
+                "severity": "high",
+                "evidence": {"expected": 1800, "actual": 1500, "difference": 300}
+            },
+            {
+                "id": "AI_FINANCIAL_INCONSISTENCY",
+                "description": "AI detected financial calculation issues",
+                "severity": "ai",
+                "evidence": {"check": "financial_consistency"}
+            }
+        ],
+        "ai_signals": {
+            "status": "INVALID",
+            "checks": {
+                "format_validation": True,
+                "financial_consistency": False,
+                "required_fields": False
+            },
+            "errors": ["Missing vendor GSTIN", "Tax calculation mismatch"]
+        },
         "document": {
-            "document_id": "INV-2024-001234",
+            "document_id": "INV-2024-00567",
             "document_type": "INVOICE",
-            "invoice_number": "INV-2024-001234",
-            "invoice_date": "2024-01-15",
-            "due_date": "2024-02-15",
+            "invoice_number": "INV-2024-00567",
+            "invoice_date": "2024-01-20",
+            "due_date": "2024-02-20",
             "vendor": {
-                "name": "ABC Suppliers Pvt Ltd",
-                "gstin": "29AABCT2345F1Z3",
-                "pan": "AABCT2345F",
-                "address": "123 Business Park, Bangalore"
+                "name": "Quick Supplies Trading Co.",
+                "gstin": None,
+                "pan": "AABCS1234F",
+                "address": "45 Market Street, Delhi"
             },
             "buyer": {
-                "name": "XYZ Corporation",
-                "gstin": "29XYZC9876G1Z5",
-                "address": "456 Corporate Tower, Mumbai"
+                "name": "Government Department XYZ",
+                "gstin": "07AAAGD0123E1Z5",
+                "address": "Sector 12, New Delhi"
             },
             "amounts": {
-                "subtotal": 10000.00,
-                "taxable_amount": 10000.00,
-                "cgst": 900.00,
-                "sgst": 900.00,
-                "igst": 0.00,
-                "tax_amount": 1800.00,
-                "total_amount": 11800.00,
-                "discount": 0.00
+                "subtotal": 50000.00,
+                "taxable_amount": 50000.00,
+                "cgst": 4500.00,
+                "sgst": 4500.00,
+                "tax_amount": 9000.00,
+                "discount": 0,
+                "total_amount": 59000.00
             },
             "line_items": [
                 {
-                    "description": "Office Supplies - Paper A4",
+                    "description": "Office Stationery Kit",
+                    "hsn_code": "4820",
+                    "quantity": 50,
+                    "unit": "sets",
+                    "unit_price": 600.00,
+                    "total_amount": 30000.00
+                },
+                {
+                    "description": "Printer Paper A4 (500 sheets)",
                     "hsn_code": "4802",
                     "quantity": 100,
                     "unit": "reams",
-                    "unit_price": 50.00,
-                    "total_amount": 5000.00,
-                    "tax_rate": 18.0
-                },
-                {
-                    "description": "Printer Cartridges",
-                    "hsn_code": "8443",
-                    "quantity": 10,
-                    "unit": "pieces",
-                    "unit_price": 500.00,
-                    "total_amount": 5000.00,
-                    "tax_rate": 18.0
+                    "unit_price": 200.00,
+                    "total_amount": 20000.00
                 }
             ],
             "authentication": {
-                "has_digital_signature": True,
+                "has_digital_signature": False,
                 "has_seal": True,
-                "signature_valid": True
-            },
-            "ai_validation": {
-                "status": "VALID",
-                "checks": {
-                    "format_validation": True,
-                    "financial_consistency": True,
-                    "required_fields": True
-                },
-                "errors": [],
-                "warnings": []
+                "signature_valid": False
             }
         }
     }
 
 
-def create_suspicious_invoice() -> Dict[str, Any]:
-    """Create a suspicious invoice for testing fraud detection."""
-    return {
-        "document": {
-            "document_id": "INV-SUSPECT-999",
-            "document_type": "INVOICE",
-            "invoice_number": "INV-SUSPECT-999",
-            "invoice_date": "2024-01-20",
-            "vendor": {
-                "name": "Suspicious Vendor LLC",
-                "gstin": None,  # Missing GSTIN
-                "pan": None     # Missing PAN
-            },
-            "buyer": {
-                "name": "Target Company",
-                "gstin": "29TARG1234X1Z9"
-            },
-            "amounts": {
-                "subtotal": 100000.00,  # Round number
-                "taxable_amount": 100000.00,
-                "tax_amount": 15000.00,  # Wrong tax (should be 18000 at 18%)
-                "total_amount": 115000.00
-            },
-            "line_items": [
-                {
-                    "description": "Consulting Services",
-                    "quantity": 1,
-                    "total_amount": 100000.00
-                }
-            ],
-            "authentication": {
-                "has_digital_signature": False,  # Missing signature
-                "has_seal": False
-            },
-            "ai_validation": {
-                "status": "INVALID",
-                "checks": {
-                    "format_validation": False,
-                    "financial_consistency": False,
-                    "required_fields": False
-                },
-                "errors": [
-                    "Missing vendor GSTIN",
-                    "Tax calculation mismatch",
-                    "Missing digital signature"
-                ],
-                "warnings": ["Unusually round amounts detected"]
-            }
-        }
-    }
-
-
-def print_analysis_report(report: Dict[str, Any], title: str = "INVOICE FRAUD ANALYSIS") -> None:
-    """Pretty-print an analysis report."""
+def print_report_summary(report: Dict[str, Any]) -> None:
+    """Print a summary of the generated report."""
     print("\n" + "=" * 70)
-    print(f"📊 {title}")
+    print("📋 INVOICE AUDIT REPORT GENERATED")
     print("=" * 70)
     
-    # Check for errors
     if report.get('error'):
-        print(f"\n❌ ERROR: {report['error']}")
+        print(f"\n❌ Error: {report['error']}")
         return
     
-    # Main metrics
-    print(f"\n📄 Document Type: {report['document_type']}")
-    print(f"🎯 Fraud Score:   {report['fraud_score']:.2f} / 100")
-    print(f"⚠️  Risk Level:    {report['risk_level']}")
+    print(f"\n📊 Risk Score: {report['fraud_score']}/100")
+    print(f"⚠️  Risk Level: {report['risk_level']}")
+    print(f"🚩 Issues Found: {len(report['issues_identified'])}")
+    print(f"💡 Recommendations: {len(report['recommendations'])}")
     
-    # Summary
-    summary = report.get('summary', {})
-    print(f"\n📈 FLAG SUMMARY:")
-    print(f"   Total Flags:    {summary.get('total_flags', 0)}")
-    print(f"   Critical:       {summary.get('critical_flags', 0)}")
-    print(f"   High:           {summary.get('high_flags', 0)}")
-    print(f"   AI-Detected:    {summary.get('ai_flags', 0)}")
+    print("\n📄 Invoice Details:")
+    details = report.get('invoice_details', {})
+    print(f"   Vendor: {details.get('vendor_name', 'N/A')}")
+    print(f"   Invoice #: {details.get('invoice_number', 'N/A')}")
+    print(f"   Amount: {details.get('total_amount', 'N/A')}")
+    print(f"   GSTIN: {details.get('vendor_gstin', 'N/A')}")
     
-    # Triggered flags
-    flags = report.get('triggered_flags', [])
-    if flags:
-        print(f"\n🚩 TRIGGERED FLAGS ({len(flags)}):")
-        for flag in flags[:10]:  # Show first 10
-            severity = flag.get('severity', 'unknown').upper()
-            print(f"   [{severity:8}] {flag['id']}")
-            print(f"              └─ {flag['description']}")
-    else:
-        print("\n✅ No fraud flags triggered")
+    print("\n🚩 Top Issues:")
+    for issue in report['issues_identified'][:3]:
+        print(f"   {issue['icon']} [{issue['severity']}] {issue['title']}")
     
-    # Semantic analysis
-    semantic = report.get('semantic_analysis')
-    if semantic:
-        print(f"\n🧠 SEMANTIC ANALYSIS (Gemini):")
-        print(f"   Score: {semantic.get('semantic_fraud_score', 0) * 100:.1f} / 100")
-        indicators = semantic.get('risk_indicators', [])
-        if indicators:
-            print("   Risk Indicators:")
-            for ind in indicators[:5]:
-                print(f"      • {ind}")
-    
-    # Recommendations
-    recommendations = report.get('recommendations', [])
-    if recommendations:
-        print(f"\n💡 RECOMMENDATIONS:")
-        for i, rec in enumerate(recommendations, 1):
-            print(f"   {i}. {rec}")
-    
-    # Score details
-    details = report.get('details', {})
-    print(f"\n📐 SCORE COMPUTATION:")
-    print(f"   Total Weight:     {details.get('total_weight', 0)}")
-    print(f"   Max Possible:     {details.get('max_possible', 0)}")
-    if 'semantic_score' in details:
-        print(f"   Semantic Score:   {details.get('semantic_score', 0)}")
-        print(f"   Base Score:       {details.get('base_deterministic_score', 0)}")
-    
-    print("\n" + "=" * 70)
+    print("\n💡 Primary Recommendation:")
+    if report['recommendations']:
+        rec = report['recommendations'][0]
+        print(f"   {rec['icon']} {rec['action']}")
 
 
 def main():
     """Main demo function."""
+    import sys
+    
     print("\n" + "=" * 70)
-    print("🔍 INVOICE FRAUD ANALYZER - DEMO")
+    print("🔍 INVOICE AUDIT REPORT GENERATOR - DEMO")
     print("=" * 70)
     
-    # Initialize analyzer (set use_gemini=True to enable semantic analysis)
-    analyzer = InvoiceFraudAnalyzer(use_gemini=False)
+    # Check for command line input
+    if len(sys.argv) > 1:
+        agent3_output_path = sys.argv[1]
+        if os.path.exists(agent3_output_path):
+            print(f"\n📂 Loading Agent3 output from: {agent3_output_path}")
+            with open(agent3_output_path, 'r', encoding='utf-8') as f:
+                agent3_output = json.load(f)
+        else:
+            print(f"\n❌ File not found: {agent3_output_path}")
+            print("Using sample data instead...")
+            agent3_output = create_sample_agent3_output()
+    else:
+        print("\n📝 No input file provided. Using sample invoice data...")
+        print("   Usage: python agent_4.py <agent3_output.json>")
+        agent3_output = create_sample_agent3_output()
     
-    # Test 1: Clean invoice
-    print("\n\n📋 TEST 1: Analyzing CLEAN invoice...")
-    clean_invoice = create_sample_invoice()
-    clean_result = analyzer.analyze(clean_invoice)
-    print_analysis_report(clean_result, "CLEAN INVOICE ANALYSIS")
+    # Initialize generator
+    generator = InvoiceAuditReportGenerator(use_gemini=True)
     
-    # Test 2: Suspicious invoice
-    print("\n\n📋 TEST 2: Analyzing SUSPICIOUS invoice...")
-    suspicious_invoice = create_suspicious_invoice()
-    suspicious_result = analyzer.analyze(suspicious_invoice)
-    print_analysis_report(suspicious_result, "SUSPICIOUS INVOICE ANALYSIS")
+    # Generate report
+    print("\n⚙️  Generating audit report...")
+    report = generator.generate_audit_report(agent3_output)
     
-    # Test 3: Invalid document type
-    print("\n\n📋 TEST 3: Testing invalid document type...")
-    invalid_doc = {"document": {"document_type": "CONTRACT"}}
-    invalid_result = analyzer.analyze(invalid_doc)
-    print_analysis_report(invalid_result, "INVALID DOCUMENT TYPE")
+    # Print summary
+    print_report_summary(report)
     
-    # Print full JSON for suspicious invoice
-    print("\n\n📄 FULL JSON OUTPUT (Suspicious Invoice):")
+    # Export in multiple formats
+    print("\n📁 Exporting reports...")
+    try:
+        json_path = generator.export_report(report, format='json')
+        txt_path = generator.export_report(report, format='txt')
+        md_path = generator.export_report(report, format='markdown')
+        
+        print(f"   ✅ JSON: {json_path}")
+        print(f"   ✅ Text: {txt_path}")
+        print(f"   ✅ Markdown: {md_path}")
+    except Exception as e:
+        print(f"   ⚠️  Export failed: {e}")
+    
+    # Print executive summary
+    print("\n" + report['executive_summary'])
+    
+    # Print narrative
+    print("\n📝 AUDIT NARRATIVE:")
     print("-" * 70)
-    print(json.dumps(suspicious_result, indent=2, default=str))
+    print(report['audit_narrative'][:1500] + "..." if len(report['audit_narrative']) > 1500 else report['audit_narrative'])
 
 
 if __name__ == '__main__':
