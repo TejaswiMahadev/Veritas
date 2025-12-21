@@ -1,0 +1,416 @@
+{
+  "GSTIN_29ABCDE1234F1Z5": {
+    "vendor_id": "GSTIN_29ABCDE1234F1Z5",
+    "vendor_name": "ABC Corp",
+    "vendor_gstin": "29ABCDE1234F1Z5",
+    "first_seen": "2025-12-12T00:02:52.718212",
+    "last_seen": "2025-12-12T00:02:52.720435",
+    "total_invoices": 1,
+    "total_amount": 50000.0,
+    "trust_score": 64.15,
+    "trust_history": [
+      {
+        "timestamp": "2025-12-12T00:02:52.720454",
+        "trust_score": 64.15,
+        "fraud_score": 25,
+        "score_breakdown": {
+          "document_integrity": 73,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 60
+        }
+      }
+    ],
+    "flags_triggered": {},
+    "behavioral_patterns": {},
+    "metadata": {},
+    "aato": 60000000.0,
+    "is_gov_supplier": false,
+    "category": "Regular",
+    "e_invoice_mandate_start": "2023-04-01"
+  },
+  "GSTIN_U74999KA2018PTC112233": {
+    "vendor_id": "GSTIN_U74999KA2018PTC112233",
+    "vendor_name": "ACME Ofce Supplies Pvt. Ltd",
+    "vendor_gstin": "U74999KA2018PTC112233",
+    "first_seen": "2025-12-19T18:25:42.203671",
+    "last_seen": "2025-12-20T14:21:55.687318",
+    "total_invoices": 13,
+    "total_amount": 443298.0,
+    "trust_score": 56.085966662571394,
+    "trust_history": [
+      {
+        "timestamp": "2025-12-19T18:25:42.203761",
+        "trust_score": 46.75,
+        "fraud_score": 53.34,
+        "score_breakdown": {
+          "document_integrity": 40,
+          "financial_behavior": 55,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-19T18:39:55.944476",
+        "trust_score": 55.35,
+        "fraud_score": 36.05,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-19T18:40:21.950216",
+        "trust_score": 55.35,
+        "fraud_score": 34.55,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-19T18:57:22.745430",
+        "trust_score": 55.35,
+        "fraud_score": 39.05,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-19T19:14:27.546907",
+        "trust_score": 57.85,
+        "fraud_score": 13.54,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 60
+        }
+      },
+      {
+        "timestamp": "2025-12-19T19:14:28.817884",
+        "trust_score": 57.85,
+        "fraud_score": 13.54,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 60
+        }
+      },
+      {
+        "timestamp": "2025-12-20T11:40:29.169055",
+        "trust_score": 55.35,
+        "fraud_score": 37.55,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-20T11:41:18.066260",
+        "trust_score": 55.35,
+        "fraud_score": 36.05,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-20T14:06:29.362169",
+        "trust_score": 55.35,
+        "fraud_score": 36.05,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-20T14:07:02.212542",
+        "trust_score": 55.35,
+        "fraud_score": 34.55,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-20T14:21:06.113187",
+        "trust_score": 55.35,
+        "fraud_score": 34.55,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-20T14:21:35.926127",
+        "trust_score": 55.35,
+        "fraud_score": 36.05,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-20T14:21:55.687340",
+        "trust_score": 57.85,
+        "fraud_score": 13.54,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 60
+        }
+      }
+    ],
+    "flags_triggered": {
+      "INV_AMOUNT_MISMATCH": 1,
+      "INV_GSTIN_FORMAT": 1,
+      "INV_PAN_MISMATCH": 1,
+      "INV_MISSING_SIGNATURE": 13,
+      "INV_MISSING_FIELD": 12
+    },
+    "behavioral_patterns": {},
+    "metadata": {},
+    "aato": 0.0,
+    "is_gov_supplier": false,
+    "category": "Regular",
+    "e_invoice_mandate_start": null
+  },
+  "GSTIN_36AAJCG0980D1ZP": {
+    "vendor_id": "GSTIN_36AAJCG0980D1ZP",
+    "vendor_name": "Geddit Convenience Private Limited",
+    "vendor_gstin": "36AAJCG0980D1ZP",
+    "first_seen": "2025-12-20T22:21:39.604193",
+    "last_seen": "2025-12-20T22:22:14.111174",
+    "total_invoices": 2,
+    "total_amount": 790.0,
+    "trust_score": 55.349999999999994,
+    "trust_history": [
+      {
+        "timestamp": "2025-12-20T22:21:39.604301",
+        "trust_score": 55.35,
+        "fraud_score": 34.55,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-20T22:22:14.111189",
+        "trust_score": 55.35,
+        "fraud_score": 40.55,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      }
+    ],
+    "flags_triggered": {
+      "INV_MISSING_SIGNATURE": 2,
+      "INV_MISSING_FIELD": 2
+    },
+    "behavioral_patterns": {},
+    "metadata": {},
+    "aato": 0.0,
+    "is_gov_supplier": false,
+    "category": "Regular",
+    "e_invoice_mandate_start": null
+  },
+  "GSTIN_29AACCA9987F1Z2": {
+    "vendor_id": "GSTIN_29AACCA9987F1Z2",
+    "vendor_name": "ACME Ofce Supplies Pvt. Ltd",
+    "vendor_gstin": "29AACCA9987F1Z2",
+    "first_seen": "2025-12-21T01:00:21.555614",
+    "last_seen": "2025-12-21T10:49:34.713868",
+    "total_invoices": 11,
+    "total_amount": 1076886.0,
+    "trust_score": 54.54410435,
+    "trust_history": [
+      {
+        "timestamp": "2025-12-21T01:00:21.556487",
+        "trust_score": 49.25,
+        "fraud_score": 13.54,
+        "score_breakdown": {
+          "document_integrity": 40,
+          "financial_behavior": 55,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 60
+        }
+      },
+      {
+        "timestamp": "2025-12-21T01:06:00.536153",
+        "trust_score": 49.25,
+        "fraud_score": 13.54,
+        "score_breakdown": {
+          "document_integrity": 40,
+          "financial_behavior": 55,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 60
+        }
+      },
+      {
+        "timestamp": "2025-12-21T01:14:01.708643",
+        "trust_score": 49.25,
+        "fraud_score": 13.54,
+        "score_breakdown": {
+          "document_integrity": 40,
+          "financial_behavior": 55,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 60
+        }
+      },
+      {
+        "timestamp": "2025-12-21T04:17:45.520931",
+        "trust_score": 49.25,
+        "fraud_score": 13.54,
+        "score_breakdown": {
+          "document_integrity": 40,
+          "financial_behavior": 55,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 60
+        }
+      },
+      {
+        "timestamp": "2025-12-21T05:36:12.408455",
+        "trust_score": 46.75,
+        "fraud_score": 39.05,
+        "score_breakdown": {
+          "document_integrity": 40,
+          "financial_behavior": 55,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-21T05:54:27.571498",
+        "trust_score": 55.35,
+        "fraud_score": 39.05,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-21T05:55:01.509769",
+        "trust_score": 55.35,
+        "fraud_score": 39.05,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-21T07:16:07.271615",
+        "trust_score": 55.35,
+        "fraud_score": 40.55,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-21T07:16:41.630170",
+        "trust_score": 55.35,
+        "fraud_score": 37.55,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-21T10:48:55.199614",
+        "trust_score": 55.35,
+        "fraud_score": 37.55,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      },
+      {
+        "timestamp": "2025-12-21T10:49:34.713888",
+        "trust_score": 55.35,
+        "fraud_score": 36.05,
+        "score_breakdown": {
+          "document_integrity": 52,
+          "financial_behavior": 75,
+          "frequency_pattern": 50,
+          "metadata_anomalies": 50,
+          "ai_reasoning": 35
+        }
+      }
+    ],
+    "flags_triggered": {
+      "INV_AMOUNT_MISMATCH": 5,
+      "INV_GSTIN_FORMAT": 5,
+      "INV_MISSING_SIGNATURE": 6,
+      "INV_MISSING_FIELD": 6
+    },
+    "behavioral_patterns": {},
+    "metadata": {},
+    "aato": 0.0,
+    "is_gov_supplier": false,
+    "category": "Regular",
+    "e_invoice_mandate_start": null
+  }
+}
