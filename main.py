@@ -15,13 +15,13 @@ load_dotenv()
 
 # Import Agents
 # NEW: Combined Agent 1 & 2 using NIM
-from agent_combined import InvoiceProcessor, ExtractedNormalizedInvoice
+from agent_1 import InvoiceProcessor, ExtractedNormalizedInvoice
 
 # Agent 3 and 4 remain for Analysis and Reporting
-from agent_3 import InvoiceFraudAnalyzer
-from agent_4 import InvoiceAuditReportGenerator
-from agent_5_vendor_trust import VendorTrustAnalyzer
-from agent_6_disagreement_resolver import MultiAgentDisagreementResolver
+from agent_2 import InvoiceFraudAnalyzer
+from agent_3 import InvoiceAuditReportGenerator
+from agent_4 import VendorTrustAnalyzer
+from agent_5 import MultiAgentDisagreementResolver
 
 app = FastAPI(title="Agentic Invoice Auditor API", version="2.0.0")
 
@@ -270,5 +270,6 @@ async def complete_pipeline(file: UploadFile = File(...), enable_semantic_ai: bo
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
 
