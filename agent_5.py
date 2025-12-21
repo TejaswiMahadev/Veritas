@@ -68,15 +68,30 @@ class MultiAgentDisagreementResolver:
             RESOLUTION_STRATEGIES["balanced"]
         )
         
+        self.use_vertex = os.getenv('USE_VERTEX_AI', 'false').lower() == 'true'
         self.client = None
-        if self.api_key:
-            try:
-                self.client = genai.Client(api_key=self.api_key)
+        
+        try:
+            if self.use_vertex:
+                print(" Using Vertex AI for arbitration (Google Cloud)")
+                self.client = genai.Client(
+                    vertexai=True,
+                    project=os.getenv('GCP_PROJECT_ID'),
+                    location=os.getenv('GCP_LOCATION', 'us-central1')
+                )
+            else:
+                if self.api_key:
+                    self.client = genai.Client(api_key=self.api_key)
+            
+            if self.client:
                 self.model_name = "gemini-2.5-flash"
                 print(" AI Arbitrator initialized")
-            except Exception as e:
-                print(f"  AI Arbitrator unavailable: {e}")
-                self.client = None
+            else:
+                if not self.use_vertex:
+                    print(" AI Arbitrator: No API key provided")
+        except Exception as e:
+            print(f"  AI Arbitrator initialization failed: {e}")
+            self.client = None
     
     def analyze_with_committee(
         self,
