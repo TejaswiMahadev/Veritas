@@ -24,7 +24,7 @@ except ImportError:
     print("Warning: Cloud Vision not available. Install google-cloud-vision for enhanced OCR.")
 
 # NIM Client
-from utils.nim_client import NimClient
+from nim_client import NimClient
 
 # Import NormalizeInvoice for compatibility if needed, or define here.
 # We will define a structure compatible with the rest of the pipeline.
